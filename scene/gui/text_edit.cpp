@@ -4444,7 +4444,8 @@ int TextEdit::get_line_wrap_index_at_col(int p_line, int p_column) const {
 	return wrap_index;
 }
 
-void TextEdit::cursor_set_column(int p_col, bool p_adjust_viewport) {
+void TextEdit::cursor_set_column(int idx, int p_col, bool p_adjust_viewport) {
+	Cursor &cursor = cursors.get(idx);
 	if (p_col < 0) {
 		p_col = 0;
 	}
@@ -4468,7 +4469,8 @@ void TextEdit::cursor_set_column(int p_col, bool p_adjust_viewport) {
 	}
 }
 
-void TextEdit::cursor_set_line(int p_row, bool p_adjust_viewport, bool p_can_be_hidden, int p_wrap_index) {
+void TextEdit::cursor_set_line(int idx, int p_row, bool p_adjust_viewport, bool p_can_be_hidden, int p_wrap_index) {
+	auto& cursor = cursors.get(idx);
 	if (setting_row) {
 		return;
 	}
@@ -4526,11 +4528,11 @@ void TextEdit::cursor_set_line(int p_row, bool p_adjust_viewport, bool p_can_be_
 	}
 }
 
-int TextEdit::cursor_get_column() const {
+int TextEdit::cursor_get_column(int idx) const {
 	return cursor.column;
 }
 
-int TextEdit::cursor_get_line() const {
+int TextEdit::cursor_get_line(int idx) const {
 	return cursor.line;
 }
 
@@ -5232,7 +5234,9 @@ void TextEdit::select_all() {
 	if (!selecting_enabled) {
 		return;
 	}
+	clear_rest_cursors();
 
+	auto &selection = selections.get(0);
 	if (text.size() == 1 && text[0].length() == 0) {
 		return;
 	}

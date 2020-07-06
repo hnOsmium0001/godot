@@ -150,23 +150,29 @@ public:
 	};
 
 private:
+	/// Offset in characters from leftmost column
+	int xofs = 0;
+
 	struct Cursor {
-		int last_fit_x;
-		int line, column; ///< cursor
-		int x_ofs, line_ofs, wrap_ofs;
-		Cursor() {
-			last_fit_x = 0;
-			line = 0;
-			column = 0; ///< cursor
-			x_ofs = 0;
-			line_ofs = 0;
-			wrap_ofs = 0;
-		}
-	} cursor;
+		int last_fit_x = 0;
+		/// Cursor positions
+		int line = 0,
+			column = 0;
+		/// Line offset from TODO validate
+		int line_ofs = 0;
+		/// Offset from the wrapped block that this cursor is inside TODO validate
+		int wrap_ofs = 0;
+	};
+
+	struct Cursors {
+		Vector<Cursor> vec;
+
+		Cursor &get(int idx) { return vec.get(idx); }
+		const Cursor &operator[](int idx) const { return vec[idx]; }
+	} cursors;
 
 	struct Selection {
 		enum Mode {
-
 			MODE_NONE,
 			MODE_SHIFT,
 			MODE_POINTER,
@@ -174,33 +180,25 @@ private:
 			MODE_LINE
 		};
 
-		Mode selecting_mode;
-		int selecting_line, selecting_column;
-		int selected_word_beg, selected_word_end, selected_word_origin;
-		bool selecting_text;
+		Mode selecting_mode = MODE_NONE;
+		int selecting_line = 0, selecting_column = 0;
+		int selected_word_beg = 0, selected_word_end = 0, selected_word_origin = 0;
+		bool selecting_text = false;
 
-		bool active;
+		int from_line = 0, from_column = 0;
+		int to_line = 0, to_column = 0;
 
-		int from_line, from_column;
-		int to_line, to_column;
+		bool shiftclick_left = false;
+	};
 
-		bool shiftclick_left;
-		Selection() {
-			selecting_mode = MODE_NONE;
-			selecting_line = 0;
-			selecting_column = 0;
-			selected_word_beg = 0;
-			selected_word_end = 0;
-			selected_word_origin = 0;
-			selecting_text = false;
-			active = false;
-			from_line = 0;
-			from_column = 0;
-			to_line = 0;
-			to_column = 0;
-			shiftclick_left = false;
-		}
-	} selection;
+	struct Selections {
+		Vector<Selection> vec;
+
+		bool active = false;
+
+		Selection &get(int idx) { return vec.get(idx); }
+		const Selection &operator[](int idx) const { return vec[idx]; }
+	} selections;
 
 	struct Cache {
 		Ref<Texture2D> tab_icon;
@@ -641,8 +639,13 @@ public:
 
 	void center_viewport_to_cursor();
 
-	void cursor_set_column(int p_col, bool p_adjust_viewport = true);
-	void cursor_set_line(int p_row, bool p_adjust_viewport = true, bool p_can_be_hidden = true, int p_wrap_index = 0);
+	void clear_rest_cursors();
+	void cursor_set_column(int idx, int p_col, bool p_adjust_viewport = true);
+	void cursor_set_line(int idx, int p_row, bool p_adjust_viewport = true, bool p_can_be_hidden = true, int p_wrap_index = 0);
+	void cursor_change_column(int p_change, bool p_adjust_viewport = true);
+	void cursor_change_column(int idx, int p_change, bool p_adjust_viewport = true);
+	void cursor_change_linh(int p_change, bool p_adjust_viewport = true, bool p_can_be_hidden = true, int p_wrap_index = 0);
+	void cursor_change_linh(int idx, int p_change, bool p_adjust_viewport = true, bool p_can_be_hidden = true, int p_wrap_index = 0);
 
 	int cursor_get_column() const;
 	int cursor_get_line() const;
@@ -674,12 +677,16 @@ public:
 	void set_syntax_coloring(bool p_enabled);
 	bool is_syntax_coloring_enabled() const;
 
+	// Cut/Copy works on the "primary" (first) cursor only, and paste pastes to all cursors
+	// TODO: make separate copy buffers for all cursors (this is a feature of sublime/vscode's multi cursor)
 	void cut();
 	void copy();
 	void paste();
 	void select_all();
-	void select(int p_from_line, int p_from_column, int p_to_line, int p_to_column);
-	void deselect();
+	void select(int idx, int p_from_line, int p_from_column, int p_to_line, int p_to_column);
+	void select_next_occurence();
+	void deselect_all();
+	void deselect(int idx);
 	void swap_lines(int line1, int line2);
 
 	void set_search_text(const String &p_search_text);
