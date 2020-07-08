@@ -744,22 +744,16 @@ void TextEdit::_notification(int p_what) {
 				}
 			}
 
-			struct PairedSymbolStatus {
-				int brace_open_match_line = -1;
-				int brace_open_match_column = -1;
-				bool brace_open_matching = false;
-				bool brace_open_mismatch = false;
-				int brace_close_match_line = -1;
-				int brace_close_match_column = -1;
-				bool brace_close_matching = false;
-				bool brace_close_mismatch = false;
-			};
+			HashMap<Vector2i, bool> brace_locations;
 
-			HashMap<int, PairedSymbolStatus> statuses;
-
-			// Draw underlines for paired symbols (parenthesis, etc.)
+			// Scan for paired symbols
 			for (int i = 0; i < cursors.size(); i++) {
 				auto &[cursor, selection] = cursors.get(i);
+
+				int brace_open_match_line = -1;
+				int brace_open_match_column = -1;
+				int brace_close_match_line = -1;
+				int brace_close_match_column = -1;
 
 				if (brace_matching_enabled && cursor.line >= 0 && cursor.line < text.size() && cursor.column >= 0) {
 					if (cursor.column < text[cursor.line].length()) {
@@ -779,15 +773,6 @@ void TextEdit::_notification(int p_what) {
 							int stack = 1;
 
 							for (int i = cursor.line; i < text.size(); i++) {
-								PairedSymbolStatus &status = [&]() -> PairedSymbolStatus& {
-									if (statuses.has(i)) {
-										return statuses.get(i);
-									} else {
-										statuses[i] = PairedSymbolStatus{};
-										return statuses[i];
-									}
-								}();
-
 								int from = i == cursor.line ? cursor.column + 1 : 0;
 								for (int j = from; j < text[i].length(); j++) {
 									CharType cc = text[i][j];
@@ -820,20 +805,12 @@ void TextEdit::_notification(int p_what) {
 									}
 
 									if (stack == 0) {
-										status.brace_open_match_line = i;
-										status.brace_open_match_column = j;
-										status.brace_open_matching = true;
+										brace_open_match_line = i;
+										brace_open_match_column = j;
 
 										break;
 									}
 								}
-								if (status.brace_open_match_line != -1) {
-									break;
-								}
-							}
-
-							if (!status.brace_open_matching) {
-								status.brace_open_mismatch = true;
 							}
 						}
 					}
@@ -854,15 +831,6 @@ void TextEdit::_notification(int p_what) {
 							int stack = 1;
 
 							for (int i = cursor.line; i >= 0; i--) {
-								PairedSymbolStatus &status = [&]() -> PairedSymbolStatus & {
-									if (statuses.has(i)) {
-										return statuses.get(i);
-									} else {
-										statuses[i] = PairedSymbolStatus{};
-										return statuses[i];
-									}
-								}();
-
 								int from = i == cursor.line ? cursor.column - 2 : text[i].length() - 1;
 								for (int j = from; j >= 0; j--) {
 									CharType cc = text[i][j];
@@ -895,24 +863,24 @@ void TextEdit::_notification(int p_what) {
 									}
 
 									if (stack == 0) {
-										status.brace_close_match_line = i;
-										status.brace_close_match_column = j;
-										status.brace_close_matching = true;
+										brace_close_match_line = i;
+										brace_close_match_column = j;
 
 										break;
 									}
 								}
-								if (status.brace_close_match_line != -1) {
+								if (brace_close_match_line != -1) {
 									break;
 								}
-							}
-
-							if (!status.brace_close_matching) {
-								status.brace_close_mismatch = true;
 							}
 						}
 					}
 				}
+
+				Vector2i open_brace_pos{ brace_open_match_line, brace_open_match_column };
+				brace_locations[open_brace_pos] = false;
+				Vector2i close_brace_pos{ brace_open_match_line, brace_close_match_column };
+				brace_locations[close_brace_pos] = true;
 			}
 
 			Point2 cursor_pos;
@@ -926,26 +894,33 @@ void TextEdit::_notification(int p_what) {
 
 			String line_num_padding = line_numbers_zero_padded ? "0" : " ";
 
-			struct SelectedLineInfo {
-				int idx;
-				bool empty;
+			// BEGIN these needs to be fixed to describe all positions
+			struct CharacterCursorInfo {
+				const CursorData *cursor;
+
+				/// The column that the cursor is in, if -1, then this line doesn't have any cursor
+				int cursor_col;
+
+				/// Start column of the selection, if -1, then nothing is selected.
+				int start_col;
+				/// End column of the selection.
+				int end_col;
+
+				bool is_selected() const { return start_col != -1; }
 			};
 
-			// TODO handle mutliple cursor having the same index
-			HashMap<int, int> cursor_lines;
-			HashMap<int, int> cursor_columns;
-			HashMap<int, int> cursor_wrap_indexes;
-			HashMap<int, SelectedLineInfo> selected_lines;
+			HashMap<Vector2i, CharacterCursorInfo, Vector2iHasher> cursors_by_pos;
 			for (int i = 0; i < cursors.size(); i++) {
 				auto &[cursor, selection] = cursors[i];
-				cursor_lines[cursor.line] = i;
-				cursor_columns[cursor.column] = i;
-				cursor_wrap_indexes[get_cursor_wrap_index(i)] = i;
+
+				Vector2i pos{ cursor.line, cursor.column };
+				cursors_by_pos[pos] = CharacterCursorInfo{ &cursors[i] };
 				for (int i_line = selection.from_line; i_line <= selection.to_line; i_line++) {
-					String line = text[i_line];
-					selected_lines[i_line] = SelectedLineInfo{ i, line.empty() };
 				}
 			}
+			// END
+
+			CharacterCursorInfo no_info{ nullptr, false, -1 };
 
 			// Expensive operation, cache it (this is rendering, editor state won't be changed).
 			bool any_selection_active = is_any_selections_active();
@@ -1447,7 +1422,7 @@ void TextEdit::_notification(int p_what) {
 							}
 						}
 
-						if (cursor.column == last_wrap_column + j && cursor.line == line && cursor_wrap_indexes.has(line_wrap_index)) {
+						if (cursor_columns.has(last_wrap_column + j) && cursor_lines.has(line) && cursor_wrap_indexes.has(line_wrap_index)) {
 							cursor_pos = Point2i(char_ofs + char_margin + ofs_x, ofs_y);
 							cursor_pos.y += (get_row_height() - cache.font->get_height()) / 2;
 
@@ -1507,7 +1482,7 @@ void TextEdit::_notification(int p_what) {
 							}
 						}
 
-						if (cursor.column == last_wrap_column + j && cursor.line == line && cursor_wrap_index == line_wrap_index && block_caret && draw_caret && !insert_mode) {
+						if (cursor_columns.has(last_wrap_column + j) && cursor_lines.has(line) && cursor_wrap_indexes.has(line_wrap_index) && block_caret && draw_caret && !insert_mode) {
 							color = cache.caret_background_color;
 						} else if (!syntax_coloring && block_caret) {
 							color = readonly ? cache.font_color_readonly : cache.font_color;
@@ -1833,7 +1808,6 @@ void TextEdit::_consume_pair_symbol(CharType ch) {
 	CharType ch_single_pair[2] = { _get_right_pair_symbol(ch), 0 };
 	CharType ch_pair[3] = { ch, _get_right_pair_symbol(ch), 0 };
 
-	// TODO maybe convert this to use overloads without idx?
 	for (int i = 0; i < cursors.size(); i++) {
 		auto &cursor = cursors.get(i).cursor;
 		int cursor_position_to_move = cursor_get_column(i) + 1;
@@ -3960,8 +3934,7 @@ void TextEdit::_gui_input(const Ref<InputEvent> &p_gui_input) {
 					end_complex_operation();
 				}
 
-				// TODO this might break
-				// original: selection.active != had_selection
+				//if (selection.active != had_selection) {
 				if (is_any_selections_active() != had_selection) {
 					end_complex_operation();
 				}
@@ -5059,8 +5032,6 @@ void TextEdit::_scroll_moved(double p_to_val) {
 				}
 			}
 		}
-		// TODO necessary?
-		//n_line = MIN(n_line, text.size() - 1);
 		// Times the visible line
 		int line_wrap_amount = times_line_wraps(n_line);
 		int wi = line_wrap_amount - (sc - v_scroll_i - 1);
@@ -6541,8 +6512,6 @@ void TextEdit::_do_text_op(const TextOperation &p_op, bool p_reverse) {
 		insert = !insert;
 	}
 
-	// TODO should this be here or in undo() and redo()
-	//cursors = p_op.cursors;
 	if (insert) {
 		for (int i = 0; i < p_op.cursors.size(); i++) {
 			auto &selection = cursors.get(i).selection;
@@ -6595,7 +6564,6 @@ void TextEdit::undo() {
 	TextOperation op = undo_stack_pos->get();
 	_do_text_op(op, true);
 	// If not removing a single character
-	// TODO is this necessary?
 	{
 		auto &sample_sel = op.cursors[0].selection;
 		if (op.type != TextOperation::TYPE_INSERT && (sample_sel.from_line != sample_sel.to_line || sample_sel.to_column != sample_sel.from_column + 1)) {
@@ -7565,21 +7533,21 @@ void TextEdit::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("delete_line"),&TextEdit::delete_line);
 */
 
-	// TODO add bindings for new methods
 	ClassDB::bind_method(D_METHOD("set_text", "text"), &TextEdit::set_text);
 	ClassDB::bind_method(D_METHOD("insert_text_at_cursor", "text"), (void (TextEdit::*)(const String &)) & TextEdit::insert_text_at_cursor);
+	ClassDB::bind_method(D_METHOD("insert_text_at_cursor", "idx", "text"), (void (TextEdit::*)(int, const String&)) &TextEdit::insert_text_at_cursor);
 
 	ClassDB::bind_method(D_METHOD("get_line_count"), &TextEdit::get_line_count);
 	ClassDB::bind_method(D_METHOD("get_text"), &TextEdit::get_text);
 	ClassDB::bind_method(D_METHOD("get_line", "line"), &TextEdit::get_line);
 	ClassDB::bind_method(D_METHOD("set_line", "line", "new_text"), &TextEdit::set_line);
 
-	ClassDB::bind_method(D_METHOD("center_viewport_to_cursor"), &TextEdit::center_viewport_to_cursor);
-	ClassDB::bind_method(D_METHOD("cursor_set_column", "column", "adjust_viewport"), &TextEdit::cursor_set_column, DEFVAL(true));
-	ClassDB::bind_method(D_METHOD("cursor_set_line", "line", "adjust_viewport", "can_be_hidden", "wrap_index"), &TextEdit::cursor_set_line, DEFVAL(true), DEFVAL(true), DEFVAL(0));
+	ClassDB::bind_method(D_METHOD("center_viewport_to_cursor", "idx"), &TextEdit::center_viewport_to_cursor);
+	ClassDB::bind_method(D_METHOD("cursor_set_column", "idx", "column", "adjust_viewport"), (void (TextEdit::*)(int, int, bool)) & TextEdit::cursor_set_column, DEFVAL(true));
+	ClassDB::bind_method(D_METHOD("cursor_set_line", "idx", "line", "adjust_viewport", "can_be_hidden", "wrap_index"), (void (TextEdit::*)(int, int, bool, bool, int)) & TextEdit::cursor_set_line, DEFVAL(true), DEFVAL(true), DEFVAL(0));
 
-	ClassDB::bind_method(D_METHOD("cursor_get_column"), &TextEdit::cursor_get_column);
-	ClassDB::bind_method(D_METHOD("cursor_get_line"), &TextEdit::cursor_get_line);
+	ClassDB::bind_method(D_METHOD("cursor_get_column", "idx"), &TextEdit::cursor_get_column);
+	ClassDB::bind_method(D_METHOD("cursor_get_line", "idx"), &TextEdit::cursor_get_line);
 	ClassDB::bind_method(D_METHOD("cursor_set_blink_enabled", "enable"), &TextEdit::cursor_set_blink_enabled);
 	ClassDB::bind_method(D_METHOD("cursor_get_blink_enabled"), &TextEdit::cursor_get_blink_enabled);
 	ClassDB::bind_method(D_METHOD("cursor_set_blink_speed", "blink_speed"), &TextEdit::cursor_set_blink_speed);
@@ -7606,17 +7574,19 @@ void TextEdit::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("copy"), &TextEdit::copy);
 	ClassDB::bind_method(D_METHOD("paste"), &TextEdit::paste);
 
-	ClassDB::bind_method(D_METHOD("select", "from_line", "from_column", "to_line", "to_column"), &TextEdit::select);
+	ClassDB::bind_method(D_METHOD("select", "idx",, "idx" "from_line", "from_column", "to_line", "to_column"), &TextEdit::select);
 	ClassDB::bind_method(D_METHOD("select_all"), &TextEdit::select_all);
-	ClassDB::bind_method(D_METHOD("deselect"), &TextEdit::deselect);
+	ClassDB::bind_method(D_METHOD("deselect", "idx"), &TextEdit::deselect);
+	ClassDB::bind_method(D_METHOD("deselect_all"), &TextEdit::deselect_all);
 
-	ClassDB::bind_method(D_METHOD("is_selection_active"), &TextEdit::is_selection_active);
-	ClassDB::bind_method(D_METHOD("get_selection_from_line"), &TextEdit::get_selection_from_line);
-	ClassDB::bind_method(D_METHOD("get_selection_from_column"), &TextEdit::get_selection_from_column);
-	ClassDB::bind_method(D_METHOD("get_selection_to_line"), &TextEdit::get_selection_to_line);
-	ClassDB::bind_method(D_METHOD("get_selection_to_column"), &TextEdit::get_selection_to_column);
-	ClassDB::bind_method(D_METHOD("get_selection_text"), &TextEdit::get_selection_text);
-	ClassDB::bind_method(D_METHOD("get_word_under_cursor"), &TextEdit::get_word_under_cursor);
+	ClassDB::bind_method(D_METHOD("is_selection_active", "idx"), &TextEdit::is_selection_active);
+	ClassDB::bind_method(D_METHOD("is_any_selection_active"), &TextEdit::is_any_selections_active);
+	ClassDB::bind_method(D_METHOD("get_selection_from_line", "idx"), &TextEdit::get_selection_from_line);
+	ClassDB::bind_method(D_METHOD("get_selection_from_column", "idx"), &TextEdit::get_selection_from_column);
+	ClassDB::bind_method(D_METHOD("get_selection_to_line", "idx"), &TextEdit::get_selection_to_line);
+	ClassDB::bind_method(D_METHOD("get_selection_to_column", "idx"), &TextEdit::get_selection_to_column);
+	ClassDB::bind_method(D_METHOD("get_selection_text", "idx"), &TextEdit::get_selection_text);
+	ClassDB::bind_method(D_METHOD("get_word_under_cursor", "idx"), &TextEdit::get_word_under_cursor);
 	ClassDB::bind_method(D_METHOD("search", "key", "flags", "from_line", "from_column"), &TextEdit::_search_bind);
 
 	ClassDB::bind_method(D_METHOD("undo"), &TextEdit::undo);
